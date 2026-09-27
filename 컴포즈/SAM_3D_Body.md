@@ -8,6 +8,7 @@
 > - MHR (Momentum Human Rig)
 > - Token
 > - Cross Attention
+> - SMPL
 
 # 개요
 
@@ -71,7 +72,6 @@
 
 - 반면, 3DB는 손과 전신 추정 모두에서 강력한 성능을 보여줍니다.  
   
-
 - 프롬프트 기반 추론(Promptable Inference): SAM 제품군 Kirillov et al. (2023); Ravi et al. (2024)에 의해 대중화된 프롬프트 기반 추론은 사용자나 시스템이 제공하는 프롬프트(예: 2D 키포인트 또는 마스크)를 통해 모델 예측을 유도할 수 있게 합니다.
 
 - Wang et al. (2025c)과 유사하게, 본 연구의 접근 방식은 2D 키포인트와 마스크를 포함한 다양한 프롬프트 유형을 지원하며, 프롬프트 토큰을 트랜스포머(transformer) 아키텍처에 직접 통합함으로써 사용자 유도 메시 복원을 가능하게 합니다.  
@@ -220,7 +220,6 @@
 	- L1 Loss
 - 또 손 bounding box 예측에 대한 uncertainty도 예측한다. 손이 가려져 있는 sample에서는 추론 시 hand decoder를 끌 수도 있다.
 
-
 ## 2 Full-body Inference
 
 실제 추론에서는 먼저 **Body Decoder 결과를 기본 full-body 결과**로 사용한다.
@@ -271,7 +270,6 @@ Full-body MHR
 
 - 즉, **데이터 양은 많아져도 다양성은 부족할 수 있다.** 그래서 SAM 3D Body는 단순히 이미지를 많이 모으는 게 아니라, **모델이 어려워할 만한 이미지를 골라내는 데이터 엔진**을 만든다.
 
-
 ## 2. 핵심 아이디어: VLM 기반 Data Mining
 
 - 이 데이터 엔진의 핵심은 **VLM(Vision-Language Model)**이다.
@@ -289,7 +287,6 @@ Annotation
    ↓
 학습 데이터에 추가
 ```
-
 
 ## 3. 어떤 이미지를 어려운 이미지로 보는가
 
@@ -356,7 +353,6 @@ Annotation
 ```
 
 - 같은 식의 개념이 다음 데이터 탐색 기준이 되는 구조라고 이해하면 된다.
-
 
 ## 6. 최종 목적
 
@@ -442,8 +438,6 @@ Image
 - 논문에서는 다양한 body shape와 hand pose를 표현하기 위한 dense keypoint 구성이라고 설명한다. 
 
 ### 3). Mesh Fitting
-
-
 
 - 초기 3D mesh를 이미지에 투영해봤는데, 안 맞으면  MHR의 Pose, Shape, Skeleton 등parameter를 조금씩 바꿔서 **3D mesh를 이미지 속 사람에게 맞춘다.**
 
@@ -588,29 +582,540 @@ Frame 1   Frame 2   Frame 3
 
 > 사람의 2D 관절 annotation + 기존 3DB 예측 + dense keypoint + 최적화 + multi-view geometry
 
+---
+# Training Datasets
+
+
+- “SAM 3D Body를 어떤 종류의 데이터로 학습했는가”를 설명하는 장
+- 핵심은 **한 종류의 데이터셋만 쓰지 않고, 서로 장단점이 다른 데이터들을 섞었다**는 것.
+
+- 저자들은 학습 데이터를 크게 네 부류로 나눈다.
+
+## 1. Single-view in-the-wild
+
+- 실제 환경에서 찍힌 **일반 단일 이미지**들이다.
+	- AI Challenger
+	- MS COCO
+	- MPII
+	- 3DPW
+	- SA-1B 일부
+- 이 데이터들의 역할은 주로 아래를 모델이 경험하게 하는 것
+	- 다양한 사람 외형
+	- 다양한 자세
+	- 다양한 배경
+	- 다양한 촬영 조건
+- 즉 **현실 세계 다양성 확보용**이야.
+
+## 2. Multi-view consistent
+
+- 여러 카메라가 같은 사람을 동시에 보는 **multi-view 데이터셋**이다.
+- 사용한 데이터는:
+	- Ego-Exo4D
+	- Harmony4D
+	- EgoHumans
+	- InterHand2.6M
+	- DexYCB
+	- Goliath
+
+- 여러 시점이 있으니까 “이 관절이 실제 3D 공간에서 어디에 있는가?”를 더 정확하게 알 수 있다.
+
+- 그래서 **3D geometry의 신뢰도를 높이는 데이터**라고 보면 된다.
+
+## 3. High-fidelity Synthetic
+
+- 실제 이미지뿐 아니라 **합성 데이터**도 사용한다.
+
+- 논문에서는 Goliath의 photorealistic synthetic extension을 사용하고, 수백만 프레임 규모의 synthetic 데이터를 활용한다고 설명한다. 
+- 이 데이터에는 정확한 MHR ground truth가 있고, 다양한 사람, 옷, 상황이 포함된다. 
+- 합성 데이터의 장점은 **정답 3D 값이 정확하다는 것**
+- 실제 사진은 다양하지만 GT가 부정확할 수 있고, synthetic은 현실성은 조금 떨어질 수 있지만 정답은 정확하다.
+- 그래서 둘을 섞는다.
+
+
+## 4. Hand datasets
+
+- 손 성능을 높이기 위해 별도의 **hand-centric dataset**도 사용한다.
+- 논문의 Table 1에서 `*`가 붙은 데이터가 hand decoder 학습에도 사용된다.
+- 대표적으로:
+	- InterHand
+	- Re:InterHand
+	- Goliath
+	- Synthetic
+- hand decoder를 학습할 때는 **wrist-truncated hand sample**도 제공한다. 즉 손목 아래쪽 손 영역을 중심으로 따로 학습시키는 것.
+
+
+## 5. Table 1
+
+|Dataset|Images/Frames|특징|
+|---|---|---|
+|MPII|5K|single-view|
+|MS COCO|24K|single-view|
+|3DPW|17K|single-view|
+|AI Challenger|172K|single-view|
+|SA-1B|1.65M|대규모 in-the-wild|
+|Ego-Exo4D|1.08M|multi-view|
+|DexYCB|291K|multi-view|
+|EgoHumans|272K|multi-view|
+|Harmony4D|250K|multi-view|
+|InterHand|1.09M|hand|
+|Re:InterHand|1.50M|hand|
+|Goliath|966K|대규모 multi-view|
+|Synthetic|1.63M|synthetic GT|
+
+## 6. 왜 이렇게 섞었는가
+
+- 이 장의 핵심은 데이터 종류마다 서로 부족한 점을 보완한다는 것.
+
+```
+Single-view in-the-wild
+→ 현실 환경의 다양성
+
+Multi-view
+→ 정확한 3D geometry
+
+Synthetic
+→ 정확한 ground truth
+
+Hand dataset
+→ 정밀한 손 자세
+```
+
+- 그래서 최종적으로는
+
+> **일반 body pose + hand pose + interaction + in-the-wild 환경을 모두 커버하기 위해 여러 종류의 데이터셋을 함께 사용했다.**
+
+- 라는 게 논문의 요지. 
 
 ---
-# 학습 데이터셋
+# Evaluation
+- **Evaluation**은 목차 기준으로 보면 크게 **“기본 성능 → 새로운 환경 일반화 → 손 성능 → 상황별 세부 분석 → 정성 평가 → 사람 선호도 평가”** 순서
+- 평가에 앞서 논문은 기본 metric으로 **MPJPE, PA-MPJPE, PVE, PCK**를 사용한다. 
+- SMPL 기반 데이터셋에서 평가할 때는 MHR mesh를 SMPL 형식으로 매핑한다. 
+- 또 모델은 `3DB-H`와 `3DB-DINOv3` 두 버전을 평가하고, 입력 이미지는 512×512로 사용한다. 
+
+| Section                | 뭘 평가하나                    |
+| ---------------------- | ------------------------- |
+| **1 Common Datasets**  | 기존 표준 benchmark 성능        |
+| **2 New Datasets**     | 처음 보는 환경에서 generalization |
+| **3 Hand Pose**        | 손 자세 추정 성능                |
+| **4 2D Categorical**   | 상황별 2D keypoint 성능        |
+| **5 3D Categorical**   | 상황별 3D mesh/pose 성능       |
+| **6 Qualitative**      | 눈으로 mesh 품질 비교            |
+| **7 Human Preference** | 사람이 보기에도 더 좋은지 평가         |
+### 1. Evaluating Performance on Common Datasets
+
+- 기존 HMR 논문들이 많이 쓰는 **표준 benchmark에서 다른 모델들과 비교**한다.
+
+- 사용 데이터셋은:
+	- 3DPW
+	- EMDB
+	- RICH
+	- COCO
+	- LSPET
+
+- 비교 대상에는 HMR2.0b, CameraHMR, PromptHMR, SMPLer-X, NLF와 WHAM, TRAM, GENMO 같은 video 기반 모델도 포함된다. 
+- 논문의 목적은 여기서 **기존 표준 benchmark에서도 SAM 3D Body가 잘 동작하는가**를 확인하는 것이다. 
+### 2. Evaluating Performance on New Datasets
+
+
+- 기존 benchmark에서 잘하는 것만으로는 **새로운 환경에서도 잘하는지 알 수 없기 때문에**, 학습 때 보지 않은 새로운 domain에서 generalization을 평가한다.
+
+- 사용한 데이터는:
+	- Ego-Exo4D
+	- Harmony4D
+	- Goliath
+	- Synthetic
+	- SA1B-Hard
+
+
+
+- 여기서 **leave-one-out** 방식도 사용한다.
+
+- 즉 특정 데이터셋에서 평가할 때. 그 데이터셋은 학습에서 빼고 → 평가해서 정말 처음 보는 domain에서도 잘하는지 본다. 
+- Full dataset으로 학습했을 때 결과도 같이 보여줘서 비교한다.
+
+## 3. Evaluating Hand Pose Estimation Performance
+
+- SAM 3D Body의 특징 중 하나가 **손까지 잘 추정하는 full-body 모델**이니까 손 성능을 별도로 평가한다.
+
+- 사용 benchmark는 **FreiHand**다.
+
+- 여기서는 full-body 출력 전체가 아니라 **Hand Decoder의 출력**을 사용해서 hand-only 모델들과 비교한다.
+
+- 평가지표는:
+	- PA-MPVPE
+	- PA-MPJPE
+	- F@5
+	- F@15
+
+- 핵심 질문은:
+> **몸 전체를 추정하는 모델인데도 손 전용 모델 수준의 손 정확도를 낼 수 있는가?**
+
+## 4. Evaluating 2D Categorical Performance
+
+- 여기서는 단순 평균 성능 말고,**어떤 종류의 이미지에서 잘하고 못하는가?** 를 분석한다.
+
+- SA1B-Hard를 **24개 category**로 나눈다.
+
+- 큰 그룹은:
+	- Body Shape
+	- Camera View
+	- Hand
+	- Multi-person
+	- Pose
+	- Visibility
+- 예를 들면 아래 같은 상황 별로 따로 본다.
+	- 옆/뒤에서 본 사람
+	- 아래에서 올려다본 사람
+	- 손가락이 겹침
+	- 물체를 잡고 있음
+	- 사람이 서로 겹침
+	- 몸이 뒤집힌 자세
+	- 다리를 벌린 자세
+	- 손/발이 가려짐
+	- 몸 일부가 잘림
+
+- 평가는 **PCK / Avg-PCK**를 사용한다.
+
+## 5. Evaluating 3D Categorical Performance
+
+- 여기는 **3D mesh 기준 상황별 분석**.
+- 3D 평가는 single-view pseudo-GT가 부정확할 수 있어서, **multi-view와 synthetic 데이터 기반으로 고품질 평가셋**을 별도로 구성했다. 
+- 총 **28개 category**로 나눈다.
+- 예:
+	- depth ambiguity
+	- orientation ambiguity
+	- scale ambiguity
+	- FOV
+	- close interaction
+	- hard / very hard pose
+	- BMI / body shape
+	- truncation
+	- bottom-up / top-down viewpoint
+
+
+- 여기서는 아래 지표를 사용해서 상황별 성능을 비교한다.
+	- PVE
+	- MPJPE
+	- PA-MPJPE
+
+- 즉, 평균값 하나만 보지 말고, **어려운 자세나 시점에서도 실제로 강한가**를 보는 장이다.
+
+## 6. Qualitative Results
+
+- 여기부터는 숫자 대신 **눈으로 직접 결과를 비교하는 정성 평가**다.
+
+- SA1B-Hard의 어려운 이미지들에 대해 SAM 3D Body와 여러 SOTA 모델의 mesh 결과를 나란히 보여준다.
+
+- 특히, 아래 같은 부분의 시각적 복원 품질을 비교한다. 
+	- 복잡한 pose
+	- 다양한 body shape
+	- occlusion
+	- 팔/다리
+	- 손
+
+-  hand crop만 있는 경우에는 Hand Decoder가 만든 mesh 결과도 별도로 보여준다.
+
+## 7. Human Preference Study
+
+- 마지막은 **사람이 직접 어느 결과가 더 좋아 보이는지 고르는 평가**다.
+
+- 왜 이걸 하냐면, MPJPE 같은 숫자가 낮다고 해서 사람이 보기에도 항상 더 자연스럽다고 할 수는 없기 때문
+
+
+
+- 총 **7,800명**이 참여했고, 6개의 baseline과 SAM 3D Body를 pairwise comparison했다. 참가자는 원본 이미지와 두 모델의 3D reconstruction을 보고 "어느 3D 모델이 원본 사람을 더 잘 표현했는가?”를 선택한다. 
+
+- 평가는 아래 지표 사용
+
+	- Win Rate
+	- Vote Share
 
 
 ---
-# 평가
+# Conclusion
+
+## 1. SAM 3D Body는 무엇인가
+
+- 저자들은 **몸과 손을 함께 다루는 robust HMR 모델인 3DB**를 제안했다고 정리한다.
+
+- 핵심 구성은:
+	- **Momentum Human Rig(MHR)** 기반의 parametric body model
+	- 유연한 **encoder–decoder architecture**
+	- **2D keypoint / mask prompt** 지원
 
 
----
-# 결론
 
+- 즉 단순히 사람 몸을 복원하는 모델이 아니라,
+ **사람 전체 + 손까지 복원하면서, prompt로 추론을 유도할 수 있는 HMR 모델**이라는 것.
+
+
+## 2. 가장 중요한 발전점은 supervision pipeline
+
+- Conclusion에서 저자들이 특히 강조하는 건 **모델 구조만큼이나 학습 데이터와 supervision 방식이 중요했다는 점**.
+
+- 기존처럼 noisy한 monocular pseudo-ground-truth에만 의존하지 않고, 아래와 같은 방식을 사용.
+	- multi-view capture
+	- synthetic data
+	- scalable data engine
+	- 어려운 샘플을 적극적으로 mining하고 annotation
+
+- 즉 저자들 주장은 **좋은 모델 구조 + 더 깨끗하고 다양한 supervision**이 같이 있어야 robust한 HMR이 된다는 거야.
+
+### 3. Generalization을 중요하게 봄
+
+- 이렇게 만든 데이터와 학습 파이프라인 덕분에 curated benchmark 안에서만 잘하는 게 아니라, **새로운 환경에서도 더 잘 일반화할 수 있었다**고 정리한다. 
+- “우리는 그냥 benchmark 점수를 올린 게 아니라, unseen domain에서도 강한 모델을 만들려고 했다.”는 메시지를 강조.
+
+### 4. Hand Decoder의 의미
+
+- 또 별도의 **Hand Decoder**를 둬서 hand crop을 입력으로 사용하고, 그 결과 **손 전용 SoTA 모델과 비교할 만한 hand pose estimation 성능**을 냈다고 정리한다. 
+- 이게 SAM 3D Body의 특징 중 하나이다.
+- 보통 full-body 모델은 손에서 약한데, 이 논문은
+- **full-body를 유지하면서도 손 성능을 높이기 위해 hand decoder를 따로 둠** 이라는 전략을 썼다.
 
 ---
 # Author Contributions
+
+## 1. Model
+
+- **Xitong Yang**이 전체 **model lead**를 맡았다.그 외 모델 쪽 역할은 다음처럼 나뉜다.
+
+|연구자|담당|
+|---|---|
+|Xitong Yang|Model Lead|
+|Jinkun Cao|Hand pose, 모델 개선|
+|Jinhyung Park|MHR integration, 모델 개선|
+|Nicolas Ugrinovic|Multi-person interaction|
+|Jiawei Liu|SAM 3D unification|
+
+- 즉 우리가 앞에서 봤던 **SAM 3D Body architecture, MHR 적용, hand pose, multi-person 처리** 같은 부분을 여러 사람이 나눠 개발. 
+
+## 2. Data
+
+- 데이터 파이프라인도 세부적으로 담당자가 나뉘어 있다.
+
+|연구자|담당|
+|---|---|
+|Devansh Kukreja|Data engine 및 infrastructure|
+|Don Pinkus|Manual annotation tool|
+|Taosha Fan|Multi-view mesh fitting|
+|Soyong Shin|Single-view mesh fitting, dense keypoint detector|
+|Jinhyun Park|MHR mesh fitting|
+|Jinkun Cao|Hand 및 whole-body data|
+
+
+- 즉 **5~7장의 데이터 관련 내용 자체가 여러 연구자의 세부 프로젝트를 합친 것**이라고 보면 된다.
+
+## 3. Evaluation
+
+- 평가도 역할이 분리되어 있다.
+
+|연구자|담당|
+|---|---|
+|Xitong Yang|Internal / External Benchmark|
+|Jinkun Cao|Hand Pose Evaluation|
+|Jiawei Liu|Human Preference Study, Visualization|
+|Nicolas Ugrinovic|Multi-person Evaluation|
+
+### 4. Leadership and XFN
+
+- 프로젝트 리더십 역할은 다음 연구자들이 담당했다고 적혀 있다.
+
+- **Kris Kitani, Anushka Sagar, Piotr Dollar, Matt Feiszli, Jitendra Malik** 
+- 여기서 논문은 `XFN`을 별도로 풀어서 정의하지는 않는다.
+- 일반적인 연구·기업 문맥에서는 **cross-functional**, 즉 여러 팀·직군 사이의 협업을 가리킬 때 자주 사용하는 약어.
 
 
 ---
 # Evaluating 3DB Prompt Following
 
+> **“SAM 3D Body에 prompt를 주면 실제로 그 prompt를 잘 따라가고, 성능도 좋아지는가?”** 를 확인하는 부분.
+
+- 논문에서는 크게 **2D Keypoint Prompt**와 **Mask Prompt** 두 가지를 평가한다. 
+
+## 1. 2D Keypoint Prompt
+
+- 먼저 사용자가 이미지 위에서 특정 관절 위치를 알려주는 경우다.
+
+- 예를 들어 모델이 손목을 잘못 찾았다면... 
+
+```
+"왼쪽 손목은 여기야"
+        ↓
+2D Keypoint Prompt
+        ↓
+SAM 3D Body
+        ↓
+Pose 다시 추정 
+```
+
+
+
+- 논문에서는 **현재 예측에서 오차가 가장 큰 keypoint를 골라 prompt로 제공**하고, prompt 개수를 늘렸을 때 성능이 어떻게 변하는지 확인했다. 
+- 결과는 꽤 명확하다.
+
+|Prompt 개수|COCO PCK ↑|EMDB MPJPE ↓|
+|---|---|---|
+|0|86.7|63.3|
+|1|90.2|60.1|
+|2|93.0|58.9|
+
+- 즉 **정확한 keypoint prompt가 많아질수록 2D와 3D 성능이 모두 좋아졌다.** 
+- 특히 흥미로운 점은 prompt 자체는 `(x,y)`라는 **2D 정보**인데도, 그 정보를 이용해서 **3D pose도 더 정확하게 추정했다는 것**이다. 
+## 2. Prompt가 조금 틀려도 괜찮은가?
+
+- 실제 사용자가 찍어주는 keypoint나 detector 결과는 완벽하지 않을 수 있다.
+
+- 그래서 저자들은 keypoint 위치에 일부러 noise를 넣었다.
+
+- 여기서 noise scale은 **사람 bounding box 크기에 대한 상대적인 오차**다.
+
+- 결과는:
+	- 작은 오차(`noise < 0.05`)에는 비교적 robust
+	- 오차가 커질수록 성능 저하
+	- 잘못된 prompt가 너무 심하면 모델이 **그 잘못된 위치를 따라가기 때문에** 오히려 성능이 떨어짐
+
+
+- Table 7을 보면 EMDB MPJPE가 악화된다.
+
+```
+정확한 Prompt       → 60.1
+noise 0.03          → 61.5
+noise 0.05          → 63.3
+noise 0.10          → 67.8
+```
+
+- 즉, **Prompt는 도움이 되지만, 틀린 prompt를 주면 모델도 그 잘못된 정보를 따라간다.**
+
+
+## 3. Hand Pose에서도 Keypoint Prompt를 사용
+
+- 앞의 Model Training and Inference에서 봤던 내용과 연결된다.
+- Hand Decoder가 손을 더 정확하게 추정한 다음 아래 정보를 prompt로 다시 Body Decoder에 넣어 전체 자세를 보정했었다.
+	- Hand Decoder → Wrist 위치
+	- Body Decoder → Elbow 위치
+
+
+- Figure 9에서는 이 전략이 실제로 효과가 있는지를 보여준다. 
+
+- 비교는:
+
+```
+Image Crop
+
+① Keypoint Prompt 없음
+
+② Body/Hand Decoder 통합 없음
+
+③ Default Inference
+   = Prompt + Hand Decoder 통합
+```
+
+
+- 논문에서는 keypoint prompt가 없으면 **손목과 손 관절의 2D alignment가 나빠지고**, 반대로 Hand Decoder를 사용하지 않으면 **wrist rotation과 finger alignment가 나빠진다**고 설명한다. 
+
+- 즉 둘 다 필요하다는 것.
+
+
+## 4. Mask Prompt
+
+
+- 이 기능은 특히 **사람이 여러 명 있을 때** 중요하다.
+
+- 예를 들어:
+
+```
+┌───────────────────┐
+│ 사람 A   사람 B   │
+│   서로 겹쳐 있음   │
+└───────────────────┘
+```
+
+- bounding box만 주면 "A를 복원해야 해? B를 복원해야 해?"가 애매할 수 있다.
+- 그래서 사람 A의 segmentation mask를 주면 명확하게 지정할 수 있다
+
+```
+"이 픽셀 영역의 사람을 복원해"
+             ↓
+        Mask Prompt
+```
+
+## 5. Mask Prompt 평가
+
+- 저자들은 multi-person 데이터에서 3DB without mask Vs 3DB with mask를 비교했다.
+
+- 특히 **Hi4D, Harmony4D**는 두 사람이 가까이 붙어 있고 서로 심하게 가리는 장면이 포함돼 있다. 
+
+- 대표적인 Hi4D 결과는:
+
+||PVE ↓|MPJPE ↓|
+|---|--:|--:|
+|Mask 없음|91.4|76.4|
+|Mask 있음|**58.3**|**47.0**|
+
+- 즉 mask를 추가하니:
+	
+	- PVE: **33.1 감소**
+	- MPJPE: **29.4 감소**
+
+- 이유는 ... 
+> segmentation mask가 **“여러 사람 중 누구를 복원해야 하는지”** 정확하게 알려주기 때문.
+
+- SA1B에서도 전체 데이터 성능 향상은 +0.9%였지만, **Multi-person subset에서는 +4.4%** 향상되어 multi-person 상황에서 mask가 특히 중요하다는 걸 보여준다. 
 
 
 ---
 # Limitations
+
+
+- AM 3D Body의 한계를 딱 **세 가지**로 정리.
+> **SAM 3D Body는 사람 개개인의 full-body mesh 복원에는 강하지만, 사람과 주변 환경의 물리적 상호작용을 직접 모델링하지 않고, 손 전문 모델 수준의 정밀도와 모든 연령대의 체형 표현에도 아직 한계가 있다.** 
+
+|한계|의미|
+|---|---|
+|**Interaction 부족**|사람을 개별적으로 복원하며 사람-사람/물체/환경 관계를 직접 이해하지 않음|
+|**Hand accuracy 한계**|Full-body 모델치고 강하지만 전문 hand-only 모델보다 뛰어나지는 않음|
+|**Age diversity 한계**|MHR이 모든 연령의 체형을 충분히 표현하지 못하며 특히 어린이에 약할 수 있음|
+## 1. Multi-person / Human-Object Interaction을 직접 모델링하지 않음
+
+- SAM 3D Body는 이미지에 여러 사람이 있어도 **각 사람을 개별적으로 처리**한다.
+
+- 즉,
+```
+사람 A → 따로 3D 복원
+사람 B → 따로 3D 복원
+```
+
+- 하지만, 아래와 같은 상호작용 자체를 이해하는 모델은 아니다.
+```
+사람 A ↔ 사람 B
+사람 ↔ 물체
+사람 ↔ 주변 환경
+```
+
+
+- 따라서 사람끼리의 상대적인 위치나 실제 물리적 접촉을 정확하게 해석하는 데 한계가 있다. 
+- 저자들은 향후에는 사람-사람, 사람-물체, 사람-환경 interaction을 학습 과정에 포함하는 것이 자연스러운 발전 방향이라고 말한다.
+
+### 2. Hand Pose는 좋아졌지만 Hand-only 모델보다 뛰어나지는 않음
+
+- SAM 3D Body는 full-body HMR 중에서는 손 성능을 많이 개선했지만, **손만 전문적으로 추정하는 모델보다 정확도가 더 높지는 않다.**
+
+- 또한 **Body Decoder 하나만 사용했을 때의 손 추정 성능도 충분하지 않다.**
+
+- 논문에서는 그 원인 중 하나로 **고품질 full-body 학습 데이터가 부족한 점**을 지적한다. 그래서 별도의 Hand Decoder가 중요한 역할을 한다.
+
+### 3. 모든 연령대의 Body Shape를 충분히 표현하지 못함
+
+- 세 번째 한계는 **사람의 나이에 따른 체형 차이**다.
+
+- SAM 3D Body뿐 아니라 기반 human mesh model인 **MHR 자체도 모든 연령대의 사람 체형을 완전히 모델링하지 못한다.**
+
+- 특히 논문에서는 **children, 즉 어린이**를 명시적으로 언급한다.
+
+- 그 결과 어린이에서는 아래 성능이 충분하지 않을 수 있다.
+	- Pose estimation
+	- Body shape modeling
 
 
