@@ -106,7 +106,7 @@
 - 7. MHR 3D Human Mesh
   
 ```
-![](SAM3DBody.png)
+![](img/SAM3DBody.png)
 ## 1. 사람 이미지 입력
 - 입력은 사람 전체 사진이 아니라 **사람 영역을 crop한 이미지**
 - 필요하면 손만 따로 crop한 이미지도 넣을 수 있다.
